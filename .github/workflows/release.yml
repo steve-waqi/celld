@@ -29,7 +29,7 @@ concurrency:
 
 env:
   RUST_VERSION: 1.98.1
-  IMAGE: ghcr.io/denoland/celld
+  IMAGE: ghcr.io/steve-waqi/celld
 
 jobs:
   build-celld:
@@ -157,6 +157,13 @@ jobs:
           set -euo pipefail
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/celld/Cargo.toml | head -1)
           tag="v$version"
+          version_without_build="${version%%+*}"
+          release_flags=()
+          case "$version_without_build" in
+            *-*)
+              release_flags+=(--prerelease --latest=false)
+              ;;
+          esac
           existing=$(gh release view "$tag" --json isDraft \
             --jq .isDraft 2>/dev/null || echo "absent")
           if [ "$existing" = "false" ]; then
@@ -181,6 +188,7 @@ jobs:
             ' | cat -s > /tmp/notes.md
           gh release create "$tag" \
             --draft \
+            "${release_flags[@]}" \
             --target "$GITHUB_SHA" \
             --title "$tag" \
             --notes-file /tmp/notes.md \
@@ -280,13 +288,30 @@ jobs:
             docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Publish immutable and release tags
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           set -euo pipefail
+          version_without_build="${CELLD_VERSION%%+*}"
+          # SemVer build metadata uses '+', which is not allowed in image tags.
+          image_version="${CELLD_VERSION//+/_}"
+          image_release_tag="${RELEASE_TAG//+/_}"
+          tags=(
+            --tag "$IMAGE:sha-$TAG_SHA"
+            --tag "$IMAGE:$image_release_tag"
+            --tag "$IMAGE:$image_version"
+          )
+          case "$version_without_build" in
+            *-*) ;;
+            *)
+              if [ "$RELEASE_IS_PRERELEASE" != "true" ]; then
+                tags+=(--tag "$IMAGE:latest")
+              fi
+              ;;
+          esac
           docker buildx imagetools create \
-            --tag "$IMAGE:sha-$TAG_SHA" \
-            --tag "$IMAGE:${{ github.event.release.tag_name }}" \
-            --tag "$IMAGE:$CELLD_VERSION" \
-            --tag "$IMAGE:latest" \
+            "${tags[@]}" \
             "$IMAGE:$TAG_SHA-amd64" \
             "$IMAGE:$TAG_SHA-arm64"
 
@@ -303,7 +328,7 @@ jobs:
         if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-name: ghcr.io/denoland/celld
+          subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
 

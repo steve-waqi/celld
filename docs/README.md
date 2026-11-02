@@ -155,6 +155,17 @@ installer again with the previous tag. Each
 attestation: verify a file with
 `gh attestation verify <asset> --repo denoland/celld`.
 
+This fork's [custom releases](https://github.com/steve-waqi/celld/releases)
+start at `0.6.4-custom`. Give later releases with additional features distinct
+versions such as `0.6.4-custom.1` and `0.6.4-custom.2`, or increase the core
+version when appropriate. The `-custom` suffix marks a prerelease.
+
+Use `+metadata` only for build information, such as
+`0.6.4-custom.1+sha.abc123`. SemVer ignores build metadata when ordering
+versions, so it does not distinguish newer feature releases. The Release
+workflow preserves `+` in Git tags and replaces it with `_` in GHCR image
+tags, for example `0.6.4-custom.1_sha.abc123`.
+
 ## Configure object storage
 
 The `s3://`, `gs://`, and `az://` scheme names are case-insensitive, and
