@@ -166,6 +166,12 @@ versions, so it does not distinguish newer feature releases. The Release
 workflow preserves `+` in Git tags and replaces it with `_` in GHCR image
 tags, for example `0.6.4-custom.1_sha.abc123`.
 
+The Release workflow's default `build` phase creates the draft release.
+Publishing it starts container publication. If GitHub does not start that
+phase, run Release manually with `phase=publish` and
+`release_tag=v0.6.4-custom`. This publishes containers from the existing
+published release tag and preserves its native binaries.
+
 ## Configure object storage
 
 The `s3://`, `gs://`, and `az://` scheme names are case-insensitive, and

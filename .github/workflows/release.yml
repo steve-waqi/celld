@@ -12,6 +12,8 @@ name: Release
 # phase: architecture images are built from the tagged commit, pushed to
 # GHCR, and stitched into a multi-architecture manifest with the same
 # provenance attestation as the binaries.
+# Manual dispatch with phase=publish retries container publication for an
+# existing published release without rebuilding or replacing its binaries.
 on:
   push:
     branches:
@@ -19,6 +21,18 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      phase:
+        description: Build release binaries or publish an existing release's container
+        type: choice
+        default: build
+        options:
+          - build
+          - publish
+      release_tag:
+        description: Published release tag to use when phase is publish
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -30,11 +44,12 @@ concurrency:
 env:
   RUST_VERSION: 1.98.1
   IMAGE: ghcr.io/steve-waqi/celld
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
 
 jobs:
   build-celld:
     name: Build celld ${{ matrix.target }}
-    if: github.event_name != 'release'
+    if: github.event_name != 'release' && inputs.phase != 'publish'
     strategy:
       fail-fast: false
       matrix:
@@ -78,7 +93,7 @@ jobs:
   # be published; nothing is pushed at candidate time.
   container-check:
     name: Container smoke build
-    if: github.event_name != 'release'
+    if: github.event_name != 'release' && inputs.phase != 'publish'
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     permissions:
@@ -109,7 +124,7 @@ jobs:
 
   draft-release:
     name: Attest and draft the release
-    if: github.event_name != 'release'
+    if: github.event_name != 'release' && inputs.phase != 'publish'
     needs:
       - build-celld
     runs-on: ubuntu-22.04
@@ -199,7 +214,7 @@ jobs:
     # unexpanded matrix expression; GitHub still appends the platform when
     # the job actually runs.
     name: Build container
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || inputs.phase == 'publish'
     strategy:
       fail-fast: false
       matrix:
@@ -218,15 +233,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Resolve and validate the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          test -n "$RELEASE_TAG"
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/celld/Cargo.toml | head -1)
-          test "${{ github.event.release.tag_name }}" = "v$version"
+          test "$RELEASE_TAG" = "v$version"
+          release=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)
+          test "$(jq -r .isDraft <<< "$release")" = "false"
           echo "TAG_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "CELLD_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_IS_PRERELEASE=$(jq -r .isPrerelease <<< "$release")" >> "$GITHUB_ENV"
 
       # Registry cache export (--cache-to type=registry) needs the
       # docker-container driver; the default docker driver cannot export.
@@ -258,7 +279,7 @@ jobs:
 
   publish-container:
     name: Publish multi-architecture image
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || inputs.phase == 'publish'
     needs: build-container
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -270,15 +291,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Resolve and validate the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          test -n "$RELEASE_TAG"
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/celld/Cargo.toml | head -1)
-          test "${{ github.event.release.tag_name }}" = "v$version"
+          test "$RELEASE_TAG" = "v$version"
+          release=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)
+          test "$(jq -r .isDraft <<< "$release")" = "false"
           echo "TAG_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "CELLD_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_IS_PRERELEASE=$(jq -r .isPrerelease <<< "$release")" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         env:
@@ -288,9 +315,6 @@ jobs:
             docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Publish immutable and release tags
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           set -euo pipefail
           version_without_build="${CELLD_VERSION%%+*}"
