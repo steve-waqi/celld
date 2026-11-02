@@ -462,6 +462,7 @@ pub fn pool_limits() -> celld_logic::isolate::PoolLimits {
         // rather than two independently configurable values.
         grow_at: GROW_AT,
         shrink_under: SHRINK_UNDER,
+        min_isolates: 0,
         max_stateless: env_usize("CELLD_MAX_STATELESS_ISOLATES").unwrap_or(cores),
         max_requests: env_usize("CELLD_MAX_REQUESTS"),
         // This is an engine blast-radius policy. The resident-cell and RSS
@@ -2727,13 +2728,16 @@ impl StatelessRuntime {
         config: Arc<WorkerConfig>,
         node: Arc<str>,
         region: Arc<str>,
+        keep_one_isolate: bool,
     ) -> anyhow::Result<Self> {
         let build = {
             let config = config.clone();
             move || Worker::load_config(config.clone())
         };
+        let mut limits = pool_limits();
+        limits.min_isolates = usize::from(keep_one_isolate);
         let isolates = Arc::new(crate::pool::Pool::new(
-            pool_limits(),
+            limits,
             admission_wait(),
             Box::new(build),
         ));

@@ -467,6 +467,7 @@ impl Generation {
     ) -> anyhow::Result<Self> {
         let GenerationOptions { node, region } = options;
         let DeploymentGraph { primary, cohosted } = graph;
+        let keep_one_isolate = crate::env_vars::flag("CELLD_KEEP_ONE_ISOLATE", false)?;
         crate::runtime::init_engine();
 
         // A Queue class is shared by every co-hosted script, but its broker
@@ -581,6 +582,7 @@ impl Generation {
                 config.clone(),
                 node.clone(),
                 region.clone(),
+                keep_one_isolate && is_primary,
             )?;
             if service_pools.insert(script.clone(), pool).is_some() {
                 return Err(anyhow!("duplicate co-hosted Worker script {script}"));

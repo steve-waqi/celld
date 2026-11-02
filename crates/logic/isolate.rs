@@ -85,6 +85,9 @@ pub struct PoolLimits {
     /// worth starting. Below `grow_at`, and the gap is the hysteresis that
     /// stops growth and retirement chasing each other.
     pub shrink_under: usize,
+    /// Minimum live isolates preserved by ordinary retirement. Forced
+    /// retirement of failed isolates and superseded generations bypasses it.
+    pub min_isolates: usize,
     /// Ceiling on live isolates. Past it the pool queues rather than grows.
     pub max_stateless: usize,
     /// Affiliated stateless requests the node may hold at once, across every
@@ -333,7 +336,7 @@ pub fn may_free(load: &IsolateLoad) -> bool {
 
 pub fn retire(load: &PoolLoad) -> Option<IsolateId> {
     let live = load.live().count();
-    if live == 0 {
+    if live <= load.limits.min_isolates {
         return None;
     }
 

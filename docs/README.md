@@ -445,9 +445,10 @@ values are sampled every second.
 | `libc_malloc` | Linux only: `in_use_bytes` and `free_bytes` of the C allocator that SQLite and V8 use |
 | `deployment.isolates`, `deployment.draining` | Per Worker script (`cells`, `stateless`, `services`): `live`, `live_empty`, `retiring`, `freed`, `heap_bytes`, `external_bytes` |
 
-A `live_empty` count that persists for more than 30 seconds means that
-isolate maintenance does not run. A persistent `retiring` count means that
-a turn or a request still holds the heap.
+Empty cell isolates normally free at the next 30-second maintenance pass.
+With `CELLD_KEEP_ONE_ISOLATE=1`, one `live_empty` primary stateless isolate
+is expected. A persistent `retiring` count means that a turn or a request
+still holds the heap.
 
 A positive `capacity_waiting` or a `pressured` lease is the signal to add
 a node. Scale down only when every remaining node reports
@@ -660,6 +661,7 @@ unset variable selects its default. A Boolean variable accepts only `0` or
 | `CELLD_MAX_REQUEST_BODY_BYTES` | The body limit for a public Worker request or a direct Durable Object request (default: 1 GiB) |
 | `CELLD_MAX_RESIDENT_CELLS` | The hard limit for resident cells, enforced at admission |
 | `CELLD_IDLE_EVICT_S` | Seconds after which an idle cell leaves memory and hibernates (unset: only pressure or the residency cap removes an idle cell) |
+| `CELLD_KEEP_ONE_ISOLATE` | `1` retains the current primary Worker's last healthy stateless/HTTP isolate during ordinary maintenance (default: `0`; restart to change) |
 | `CELLD_PLACEMENT_WEIGHT` | The ownership share of this node, relative to the other nodes (default: the CPU count) |
 | `CELLD_REBALANCE_INTERVAL_MS` | The fleet sample interval and maximum age (default: 5000; 0 disables balancing) |
 | `CELLD_MAX_RSS_MB` | The memory threshold for pressure shedding, on the greater of the allocator-adjusted RSS and the active cgroup working set (default: 80% of the available memory; 0 disables the threshold and the absolute cap) |
@@ -678,6 +680,12 @@ unset variable selects its default. A Boolean variable accepts only `0` or
 | `CELLD_LTX_DURABILITY_TIMEOUT_SECS` | The budget for one durability proof, and for the final snapshot of a handoff (default: 10). A queued write waits at most six budgets. A slow store can need more |
 | `CELLD_TOKIO_THREADS` | Host Tokio worker threads (default: the CPU count). The `host_runtime` log event at startup reports `worker_count` |
 | `RUST_LOG` | The runtime log filter |
+
+`CELLD_KEEP_ONE_ISOLATE=1` keeps one primary Worker heap warm per node,
+including while the node is idle, at the cost of retaining that heap's memory.
+It applies to the latest successfully adopted deployment. Cell pools and
+cohosted Worker scripts still shrink to zero. Superseded generations, fatal
+runtime failures, and process shutdown can release the retained isolate.
 
 An L1 compaction merges at most 256 source objects within a 64 MiB buffer.
 A larger source object spills to temporary files in the cell's local LTX
