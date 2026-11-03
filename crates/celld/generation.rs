@@ -286,10 +286,7 @@ pub struct Generation {
     pub(crate) stateless: crate::runtime::StatelessRuntime,
     pub(crate) services: HashMap<String, crate::runtime::StatelessRuntime>,
     pub(crate) cell_configs: HashMap<String, Arc<WorkerConfig>>,
-    /// The isolates a Worker script's cells live in — the same `Pool` the
-    /// stateless path admits into, because an isolate is an isolate. Cells
-    /// of one script share them, so cells of one class share module scope
-    /// exactly when they are colocated, which is what Durable Objects do.
+    /// Each script's registered cell classes share a dedicated pool.
     pub(crate) cell_isolates: HashMap<String, Arc<crate::pool::Pool>>,
     pub(crate) default_do_class: Option<Arc<str>>,
     pub(crate) assets: HashMap<String, AssetResolver>,
@@ -402,9 +399,7 @@ impl Generation {
             && self.cell_isolates.values().all(|pool| pool.is_drained())
     }
 
-    /// One maintenance pass over the cell pools: retire and free every empty
-    /// isolate. An empty cell heap carries no warm request capacity worth
-    /// preserving, unlike a stateless one.
+    /// Reclaim empty cell heaps above each pool's configured minimum.
     pub(crate) fn reap_cell_pools(&self) {
         for pool in self.cell_isolates.values() {
             pool.reap_empty();
@@ -605,15 +600,14 @@ impl Generation {
             }
         }
         let stateless = service_pools[&primary_script].clone();
-        let cell_isolates: HashMap<String, Arc<crate::pool::Pool>> = cell_configs
-            .values()
-            .map(|config| {
-                (
-                    config.script_name.clone(),
-                    crate::runtime::cell_pool(config.clone()),
-                )
-            })
-            .collect();
+        let mut cell_isolates = HashMap::new();
+        for config in cell_configs.values() {
+            if let Entry::Vacant(entry) = cell_isolates.entry(config.script_name.clone()) {
+                let pool = crate::runtime::cell_pool(config.clone(), keep_one_isolate)
+                    .with_context(|| format!("build cell pool for {}", config.script_name))?;
+                entry.insert(pool);
+            }
+        }
         Ok(Generation {
             id,
             version,

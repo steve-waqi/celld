@@ -645,12 +645,21 @@ pub(crate) fn init_engine() {
 }
 
 /// The isolates a script's cells live in, built from the script's config.
-pub(crate) fn cell_pool(config: Arc<WorkerConfig>) -> Arc<crate::pool::Pool> {
-    Arc::new(crate::pool::Pool::new(
-        pool_limits(),
+pub(crate) fn cell_pool(
+    config: Arc<WorkerConfig>,
+    keep_one_isolate: bool,
+) -> anyhow::Result<Arc<crate::pool::Pool>> {
+    let mut limits = pool_limits();
+    limits.min_isolates = usize::from(keep_one_isolate);
+    let pool = Arc::new(crate::pool::Pool::new(
+        limits,
         admission_wait(),
         Box::new(move || load_cell_isolate(config.clone())),
-    ))
+    ));
+    if keep_one_isolate {
+        pool.warm()?;
+    }
+    Ok(pool)
 }
 
 /// Wait for one cell fetch reply without retaining the internal receiver after
@@ -3602,5 +3611,49 @@ fn install_container_specs(generation: &Generation) {
     }
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         handle.spawn(crate::container::prewarm());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cell_pool_retention() -> anyhow::Result<()> {
+        init_engine();
+        let config = Arc::new(WorkerConfig::new(js::WorkerConfigOptions {
+            src: "export class Counter {} export default { fetch() { return new Response(); } }"
+                .into(),
+            script_name: "counter".into(),
+            do_classes: vec!["Counter".into()],
+            bindings: vec![],
+            r2_bindings: vec![],
+            d1_bindings: vec![],
+            kv_bindings: vec![],
+            queue_bindings: vec![],
+            queue_consumers: vec![],
+            workflow_bindings: vec![],
+            vars: vec![],
+            node: "test".into(),
+            modules: vec![],
+            compat: Default::default(),
+        }));
+
+        for keep_one in [false, true] {
+            let pool = cell_pool(config.clone(), keep_one)?;
+            let minimum = usize::from(keep_one);
+            assert_eq!(pool.census().live_empty, minimum);
+
+            let resident = pool.place_cell()?;
+            pool.reap_empty();
+            assert_eq!(pool.census().cells, 1);
+            drop(resident);
+            pool.reap_empty();
+            assert_eq!(pool.census().live_empty, minimum);
+
+            pool.retire_all();
+            assert!(pool.is_drained());
+        }
+        Ok(())
     }
 }

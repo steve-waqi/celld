@@ -657,12 +657,8 @@ impl Pool {
 
     /// Build one isolate up front.
     ///
-    /// The pool is otherwise lazy, and an idle node holding no isolates is the
-    /// point. But the first isolate is built at startup for two reasons that
-    /// laziness cannot serve: a node whose script does not load must fail
-    /// *then*, not once per request forever after; and compiling the script
-    /// inside the first request adds its whole cost to that request's latency,
-    /// which a startup probe reads as a node that never came up.
+    /// Compiling during generation construction surfaces load failures
+    /// before adoption and avoids that cost on the first request.
     pub fn warm(&self) -> Result<()> {
         self.grow(Some(self.limits.max_stateless))?;
         Ok(())
@@ -788,8 +784,8 @@ impl Pool {
         true
     }
 
-    /// Retire every empty isolate. Cell pools use this after eviction because
-    /// an empty cell heap carries no warm request capacity worth preserving.
+    /// Retire empty cell isolates down to the pool's minimum, then free
+    /// any retiring isolates that have drained.
     pub fn reap_empty(&self) {
         let Ok(_maintenance) = self.maintenance.try_write() else {
             tracing::debug!(
@@ -870,12 +866,7 @@ impl Pool {
 
     /// What the pool holds right now, for `/state`.
     ///
-    /// The count an operator of a hibernation-heavy node needs and could
-    /// not get: a dormant cell keeps about 160 KB more than its own records
-    /// explain (GCE, 2026-09-03), and the one O(cells) structure
-    /// that fits is the isolate. `live_empty` is what `reap_empty` retires
-    /// on its next pass and `retiring` is what `may_free` still refuses, so
-    /// either staying positive across passes names the leak.
+    /// `live_empty` includes warm isolates retained at the pool's minimum.
     pub fn census(&self) -> PoolCensus {
         let mut census = PoolCensus::default();
         for slot in self.slots.read().expect("pool poisoned").iter() {
